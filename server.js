@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import express from "express";
@@ -19,17 +19,13 @@ if (!BOT_TOKEN) {
 
 const bot = new TelegramBot(BOT_TOKEN);
 
-
-
 // --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
 
-// Derive deterministic client credentials from BOT_TOKEN
 const FIXED_CLIENT_ID = createHash("sha256").update(`${BOT_TOKEN}:client_id`).digest("hex").slice(0, 36);
 const FIXED_CLIENT_SECRET = createHash("sha256").update(`${BOT_TOKEN}:client_secret`).digest("hex");
 
 class ClientsStore {
   constructor() {
-    // Pre-register the only allowed client
     this.client = {
       client_id: FIXED_CLIENT_ID,
       client_secret: FIXED_CLIENT_SECRET,
@@ -45,7 +41,6 @@ class ClientsStore {
     return clientId === FIXED_CLIENT_ID ? this.client : undefined;
   }
   async registerClient(_metadata) {
-    // Always return the fixed client — no new registrations
     return this.client;
   }
 }
@@ -77,7 +72,7 @@ class OAuthProvider {
   }
 
   async exchangeAuthorizationCode(client, code, _codeVerifier) {
-    console.log(`[oauth] exchangeCode: client=${client.client_id} code=${code.slice(0,8)}...`);
+    console.log(`[oauth] exchangeCode: client=${client.client_id} code=${code.slice(0, 8)}...`);
     const data = this.codes.get(code);
     if (!data) throw new Error("Invalid authorization code");
     if (data.client.client_id !== client.client_id) throw new Error("Client mismatch");
@@ -85,7 +80,7 @@ class OAuthProvider {
 
     const accessToken = randomUUID();
     const refreshToken = randomUUID();
-    const expiresIn = 86400; // 24 hours
+    const expiresIn = 86400;
 
     this.tokens.set(accessToken, {
       clientId: client.client_id,
@@ -139,7 +134,7 @@ class OAuthProvider {
   }
 
   async verifyAccessToken(token) {
-    console.log(`[oauth] verifyToken: ${token.slice(0,8)}...`);
+    console.log(`[oauth] verifyToken: ${token.slice(0, 8)}...`);
     const data = this.tokens.get(token);
     if (!data || data.type === "refresh") throw new Error("Invalid token");
     if (data.expiresAt && data.expiresAt < Date.now()) {
@@ -202,7 +197,7 @@ function createMcpServer() {
 
 const provider = new OAuthProvider();
 const app = express();
-app.set("trust proxy", 1); // Trust first proxy (Cloudflare)
+app.set("trust proxy", 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -215,35 +210,62 @@ app.use((req, _res, next) => {
 // Health (unauthenticated)
 app.get("/health", (_, res) => res.json({ ok: true, version: "1.0.0" }));
 
-// OAuth endpoints (/.well-known/*, /authorize, /token, /register, /revoke)
+// OAuth endpoints
 const issuerUrl = new URL(SERVER_URL);
 app.use(mcpAuthRouter({
   provider,
   issuerUrl,
   scopesSupported: ["mcp:tools"],
-  allowedRedirectUris: [
-    "https://claude.ai/api/mcp/auth_callback",
-    "https://claude.com/api/mcp/auth_callback",
-  ],
 }));
 
-// Protected MCP endpoints
+// Streamable HTTP transport for MCP
 const bearerAuth = requireBearerAuth({ provider });
-const transports = {};
+const transports = new Map();
 
-app.get("/sse", bearerAuth, async (req, res) => {
-  const transport = new SSEServerTransport("/messages", res);
-  transports[transport.sessionId] = transport;
-  res.on("close", () => delete transports[transport.sessionId]);
-  const server = createMcpServer();
-  await server.connect(transport);
+// Handle POST /mcp — main Streamable HTTP endpoint
+app.post("/mcp", bearerAuth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+
+  if (sessionId && transports.has(sessionId)) {
+    // Existing session
+    const transport = transports.get(sessionId);
+    await transport.handleRequest(req, res, req.body);
+  } else {
+    // New session
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+    transport.onclose = () => {
+      if (transport.sessionId) transports.delete(transport.sessionId);
+    };
+    const server = createMcpServer();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    if (transport.sessionId) transports.set(transport.sessionId, transport);
+  }
 });
 
-app.post("/messages", bearerAuth, express.json(), async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports[sessionId];
-  if (!transport) return res.status(400).json({ error: "Unknown session" });
-  await transport.handlePostMessage(req, res);
+// Handle GET /mcp — SSE stream for server-to-client notifications
+app.get("/mcp", bearerAuth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  if (!sessionId || !transports.has(sessionId)) {
+    res.status(400).json({ error: "Missing or invalid session ID" });
+    return;
+  }
+  const transport = transports.get(sessionId);
+  await transport.handleRequest(req, res);
+});
+
+// Handle DELETE /mcp — session termination
+app.delete("/mcp", bearerAuth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  if (sessionId && transports.has(sessionId)) {
+    const transport = transports.get(sessionId);
+    await transport.handleRequest(req, res);
+    transports.delete(sessionId);
+  } else {
+    res.status(404).json({ error: "Session not found" });
+  }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -251,5 +273,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`OAuth issuer: ${SERVER_URL}`);
   console.log(`OAuth client_id: ${FIXED_CLIENT_ID}`);
   console.log(`OAuth client_secret: ${FIXED_CLIENT_SECRET}`);
+  console.log(`MCP endpoint: ${SERVER_URL}/mcp (Streamable HTTP)`);
   console.log(`Default chat: ${DEFAULT_CHAT_ID || "(not set)"}`);
 });
