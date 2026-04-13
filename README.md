@@ -28,7 +28,6 @@ Get your chat ID by messaging [@userinfobot](https://t.me/userinfobot) on Telegr
 docker run -d \
   -e TELEGRAM_BOT_TOKEN=your_bot_token \
   -e TELEGRAM_DEFAULT_CHAT_ID=your_chat_id \
-  -e OAUTH_PASSWORD=your_secret_password \
   -e SERVER_URL=https://your-domain.com \
   -p 3000:3000 \
   ghcr.io/afonsofigs/telegram-bot-mcp:latest
@@ -43,7 +42,6 @@ npm install
 
 TELEGRAM_BOT_TOKEN=your_token \
 TELEGRAM_DEFAULT_CHAT_ID=your_chat_id \
-OAUTH_PASSWORD=your_password \
 SERVER_URL=https://your-domain.com \
 node server.js
 ```
@@ -52,8 +50,7 @@ node server.js
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
-| `OAUTH_PASSWORD` | Yes | Password for the OAuth authorization page |
+| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather (also used to derive OAuth credentials) |
 | `SERVER_URL` | Yes | Public HTTPS URL of this server (used as OAuth issuer) |
 | `TELEGRAM_DEFAULT_CHAT_ID` | No | Default chat ID for messages |
 | `PORT` | No | Server port (default: 3000) |
@@ -74,22 +71,26 @@ Send a text message to a Telegram chat via Bot API.
 
 This server implements **OAuth 2.1** with:
 
-- **Dynamic Client Registration** (RFC 7591) — MCP clients register automatically
+- **Fixed client credentials** — A single `client_id` and `client_secret` are derived deterministically from `TELEGRAM_BOT_TOKEN`. No dynamic registration from unknown clients.
 - **PKCE** (S256) — Proof Key for Code Exchange, mandatory for all clients
-- **Password-protected authorize** — When a client requests authorization, a login page is shown requiring `OAUTH_PASSWORD`
-- **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted by default
+- **Password-protected authorize** — When a client requests authorization, a login page is shown requiring a password (derived from `TELEGRAM_BOT_TOKEN`)
+- **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted
+
+### Setup
+
+On startup, the server prints the `client_id` and `client_secret` to stdout. Use these when configuring your MCP connector.
 
 ### Flow
 
 1. MCP client (e.g., Claude.ai) discovers OAuth metadata via `/.well-known/oauth-authorization-server`
-2. Client registers via `/register` (Dynamic Client Registration)
+2. Client uses the fixed `client_id` and `client_secret` (from server logs)
 3. Client redirects user to `/authorize` with PKCE challenge
-4. User sees login page, enters `OAUTH_PASSWORD`
+4. User sees login page, enters password
 5. Server issues authorization code, redirects back to client
 6. Client exchanges code for access token via `/token`
 7. Client uses access token in `Authorization: Bearer <token>` header for `/sse` and `/messages`
 
-No one can use the MCP tools without knowing the password.
+No one can use the MCP tools without the bot token-derived credentials.
 
 ## Claude.ai Connector Setup
 
@@ -97,7 +98,7 @@ No one can use the MCP tools without knowing the password.
 2. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
 3. Click **Add custom connector**
 4. Enter the URL: `https://your-domain.com/sse`
-5. Claude.ai will redirect to the authorization page — enter your `OAUTH_PASSWORD`
+5. Claude.ai will redirect to the authorization page — enter the password from the server logs
 6. The connector is now linked and available in conversations and scheduled tasks
 
 ## Endpoints
@@ -140,11 +141,6 @@ spec:
                 secretKeyRef:
                   name: telegram-mcp-secrets
                   key: TELEGRAM_BOT_TOKEN
-            - name: OAUTH_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: telegram-mcp-secrets
-                  key: OAUTH_PASSWORD
             - name: SERVER_URL
               value: "https://your-domain.com"
             - name: TELEGRAM_DEFAULT_CHAT_ID

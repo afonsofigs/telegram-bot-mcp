@@ -25,13 +25,14 @@ Dockerfile         — Container build
 
 ```bash
 npm install
-TELEGRAM_BOT_TOKEN=token OAUTH_PASSWORD=pass SERVER_URL=http://localhost:3000 node server.js
+TELEGRAM_BOT_TOKEN=token SERVER_URL=http://localhost:3000 node server.js
 ```
 
 ## Key design decisions
 
-- **OAuth 2.1 in-memory** — Tokens and clients are stored in memory. Single-instance only. If the pod restarts, clients must re-authorize. This is acceptable for a personal-use server.
-- **Auto-approve with password** — The `/authorize` endpoint shows a login page. No user database — just a single `OAUTH_PASSWORD` env var.
+- **OAuth 2.1 in-memory** — Tokens are stored in memory. Single-instance only. If the pod restarts, clients must re-authorize. Acceptable for personal use.
+- **Fixed client credentials** — `client_id` and `client_secret` are derived from `TELEGRAM_BOT_TOKEN` via SHA-256. No dynamic registration from unknown clients. Deterministic across restarts.
+- **Password-protected authorize** — The `/authorize` endpoint shows a login page. Password is also derived from `TELEGRAM_BOT_TOKEN`.
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted.
 - **No polling** — The bot is created with `node-telegram-bot-api` in non-polling mode (only sends, never receives).
 
