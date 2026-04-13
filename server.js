@@ -232,7 +232,7 @@ function createMcpServer() {
 
 const provider = new OAuthProvider();
 const app = express();
-app.set("trust proxy", true);
+app.set("trust proxy", 1); // Trust first proxy (Cloudflare)
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
