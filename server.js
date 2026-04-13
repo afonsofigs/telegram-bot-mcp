@@ -19,31 +19,7 @@ if (!BOT_TOKEN) {
 
 const bot = new TelegramBot(BOT_TOKEN);
 
-function loginPage(pendingId, error) {
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Telegram MCP — Authorize</title>
-<style>
-  body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}
-  .card{background:#1e293b;padding:2rem;border-radius:12px;width:320px;box-shadow:0 4px 24px rgba(0,0,0,.3)}
-  h2{margin:0 0 1rem;text-align:center}
-  input[type=password]{width:100%;padding:.75rem;border:1px solid #334155;border-radius:8px;background:#0f172a;color:#e2e8f0;font-size:1rem;box-sizing:border-box}
-  button{width:100%;padding:.75rem;margin-top:1rem;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:1rem;cursor:pointer}
-  button:hover{background:#2563eb}
-  .error{color:#f87171;text-align:center;margin-top:.5rem;font-size:.9rem}
-  .info{color:#94a3b8;text-align:center;font-size:.85rem;margin-top:1rem}
-</style></head>
-<body><div class="card">
-  <h2>Telegram Bot MCP</h2>
-  <form method="POST" action="/authorize">
-    <input type="hidden" name="pending_id" value="${pendingId}">
-    <input type="password" name="password" placeholder="Password" autofocus required>
-    <button type="submit">Authorize</button>
-    ${error ? '<p class="error">Password incorrecta</p>' : ''}
-  </form>
-  <p class="info">A MCP client is requesting access to send Telegram messages.</p>
-</div></body></html>`;
-}
+
 
 // --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
 
@@ -82,36 +58,16 @@ class OAuthProvider {
   }
 
   async authorize(client, params, res) {
-    // Store pending authorization
-    const pendingId = randomUUID();
-    this.codes.set(`pending:${pendingId}`, { client, params, createdAt: Date.now() });
+    // Auto-approve — security is enforced by fixed client_id/secret
+    const code = randomUUID();
+    this.codes.set(code, { client, params, createdAt: Date.now() });
 
-    // Check if password was submitted via POST
-    if (res.req.method === "POST" && res.req.body?.password) {
-      const submitted = res.req.body.password;
-      const pid = res.req.body.pending_id;
-      const pending = this.codes.get(`pending:${pid}`);
+    const searchParams = new URLSearchParams({ code });
+    if (params.state) searchParams.set("state", params.state);
 
-      if (!pending || submitted !== BOT_TOKEN) {
-        res.status(403).send(loginPage(pendingId, true));
-        return;
-      }
-
-      // Password correct — issue authorization code
-      this.codes.delete(`pending:${pid}`);
-      const code = randomUUID();
-      this.codes.set(code, { client: pending.client, params: pending.params, createdAt: Date.now() });
-
-      const searchParams = new URLSearchParams({ code });
-      if (pending.params.state) searchParams.set("state", pending.params.state);
-      const targetUrl = new URL(pending.params.redirectUri);
-      targetUrl.search = searchParams.toString();
-      res.redirect(targetUrl.toString());
-      return;
-    }
-
-    // Show login page
-    res.status(200).send(loginPage(pendingId, false));
+    const targetUrl = new URL(params.redirectUri);
+    targetUrl.search = searchParams.toString();
+    res.redirect(targetUrl.toString());
   }
 
   async challengeForAuthorizationCode(_client, code) {
