@@ -222,8 +222,8 @@ app.use(mcpAuthRouter({
 const bearerAuth = requireBearerAuth({ provider });
 const transports = new Map();
 
-// Handle POST /mcp — main Streamable HTTP endpoint
-app.post("/mcp", bearerAuth, async (req, res) => {
+// Streamable HTTP handler — serves /mcp and /sse (claude.ai uses /sse path)
+async function handlePost(req, res) {
   const sessionId = req.headers["mcp-session-id"];
 
   if (sessionId && transports.has(sessionId)) {
@@ -245,8 +245,7 @@ app.post("/mcp", bearerAuth, async (req, res) => {
   }
 });
 
-// Handle GET /mcp — SSE stream for server-to-client notifications
-app.get("/mcp", bearerAuth, async (req, res) => {
+async function handleGet(req, res) {
   const sessionId = req.headers["mcp-session-id"];
   if (!sessionId || !transports.has(sessionId)) {
     res.status(400).json({ error: "Missing or invalid session ID" });
@@ -256,8 +255,7 @@ app.get("/mcp", bearerAuth, async (req, res) => {
   await transport.handleRequest(req, res);
 });
 
-// Handle DELETE /mcp — session termination
-app.delete("/mcp", bearerAuth, async (req, res) => {
+async function handleDelete(req, res) {
   const sessionId = req.headers["mcp-session-id"];
   if (sessionId && transports.has(sessionId)) {
     const transport = transports.get(sessionId);
@@ -267,6 +265,13 @@ app.delete("/mcp", bearerAuth, async (req, res) => {
     res.status(404).json({ error: "Session not found" });
   }
 });
+
+// Mount on both /mcp and /sse paths
+for (const path of ["/mcp", "/sse"]) {
+  app.post(path, bearerAuth, handlePost);
+  app.get(path, bearerAuth, handleGet);
+  app.delete(path, bearerAuth, handleDelete);
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`telegram-bot-mcp listening on :${PORT}`);
