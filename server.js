@@ -58,7 +58,7 @@ class OAuthProvider {
   }
 
   async authorize(client, params, res) {
-    // Auto-approve — security is enforced by fixed client_id/secret
+    console.log(`[oauth] authorize: client=${client.client_id} redirect=${params.redirectUri}`);
     const code = randomUUID();
     this.codes.set(code, { client, params, createdAt: Date.now() });
 
@@ -77,6 +77,7 @@ class OAuthProvider {
   }
 
   async exchangeAuthorizationCode(client, code, _codeVerifier) {
+    console.log(`[oauth] exchangeCode: client=${client.client_id} code=${code.slice(0,8)}...`);
     const data = this.codes.get(code);
     if (!data) throw new Error("Invalid authorization code");
     if (data.client.client_id !== client.client_id) throw new Error("Client mismatch");
@@ -138,6 +139,7 @@ class OAuthProvider {
   }
 
   async verifyAccessToken(token) {
+    console.log(`[oauth] verifyToken: ${token.slice(0,8)}...`);
     const data = this.tokens.get(token);
     if (!data || data.type === "refresh") throw new Error("Invalid token");
     if (data.expiresAt && data.expiresAt < Date.now()) {
@@ -203,6 +205,12 @@ const app = express();
 app.set("trust proxy", 1); // Trust first proxy (Cloudflare)
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request logger
+app.use((req, _res, next) => {
+  console.log(`[http] ${req.method} ${req.path}`);
+  next();
+});
 
 // Health (unauthenticated)
 app.get("/health", (_, res) => res.json({ ok: true, version: "1.0.0" }));
