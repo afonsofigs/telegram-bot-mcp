@@ -11,13 +11,44 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DEFAULT_CHAT_ID = process.env.TELEGRAM_DEFAULT_CHAT_ID || "";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
+const OAUTH_PASSWORD = process.env.OAUTH_PASSWORD;
 
 if (!BOT_TOKEN) {
   console.error("Error: TELEGRAM_BOT_TOKEN environment variable is required");
   process.exit(1);
 }
+if (!OAUTH_PASSWORD) {
+  console.error("Error: OAUTH_PASSWORD environment variable is required");
+  process.exit(1);
+}
 
 const bot = new TelegramBot(BOT_TOKEN);
+
+function loginPage(pendingId, error) {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telegram MCP — Authorize</title>
+<style>
+  body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}
+  .card{background:#1e293b;padding:2rem;border-radius:12px;width:320px;box-shadow:0 4px 24px rgba(0,0,0,.3)}
+  h2{margin:0 0 1rem;text-align:center}
+  input[type=password]{width:100%;padding:.75rem;border:1px solid #334155;border-radius:8px;background:#0f172a;color:#e2e8f0;font-size:1rem;box-sizing:border-box}
+  button{width:100%;padding:.75rem;margin-top:1rem;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-size:1rem;cursor:pointer}
+  button:hover{background:#2563eb}
+  .error{color:#f87171;text-align:center;margin-top:.5rem;font-size:.9rem}
+  .info{color:#94a3b8;text-align:center;font-size:.85rem;margin-top:1rem}
+</style></head>
+<body><div class="card">
+  <h2>Telegram Bot MCP</h2>
+  <form method="POST" action="/authorize">
+    <input type="hidden" name="pending_id" value="${pendingId}">
+    <input type="password" name="password" placeholder="Password" autofocus required>
+    <button type="submit">Authorize</button>
+    ${error ? '<p class="error">Password incorrecta</p>' : ''}
+  </form>
+  <p class="info">A MCP client is requesting access to send Telegram messages.</p>
+</div></body></html>`;
+}
 
 // --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
 
@@ -39,16 +70,36 @@ class OAuthProvider {
   }
 
   async authorize(client, params, res) {
-    // Auto-approve (single-user server — no login UI needed)
-    const code = randomUUID();
-    this.codes.set(code, { client, params, createdAt: Date.now() });
+    // Store pending authorization
+    const pendingId = randomUUID();
+    this.codes.set(`pending:${pendingId}`, { client, params, createdAt: Date.now() });
 
-    const searchParams = new URLSearchParams({ code });
-    if (params.state) searchParams.set("state", params.state);
+    // Check if password was submitted via POST
+    if (res.req.method === "POST" && res.req.body?.password) {
+      const submitted = res.req.body.password;
+      const pid = res.req.body.pending_id;
+      const pending = this.codes.get(`pending:${pid}`);
 
-    const targetUrl = new URL(params.redirectUri);
-    targetUrl.search = searchParams.toString();
-    res.redirect(targetUrl.toString());
+      if (!pending || submitted !== OAUTH_PASSWORD) {
+        res.status(403).send(loginPage(pendingId, true));
+        return;
+      }
+
+      // Password correct — issue authorization code
+      this.codes.delete(`pending:${pid}`);
+      const code = randomUUID();
+      this.codes.set(code, { client: pending.client, params: pending.params, createdAt: Date.now() });
+
+      const searchParams = new URLSearchParams({ code });
+      if (pending.params.state) searchParams.set("state", pending.params.state);
+      const targetUrl = new URL(pending.params.redirectUri);
+      targetUrl.search = searchParams.toString();
+      res.redirect(targetUrl.toString());
+      return;
+    }
+
+    // Show login page
+    res.status(200).send(loginPage(pendingId, false));
   }
 
   async challengeForAuthorizationCode(_client, code) {
@@ -193,6 +244,10 @@ app.use(mcpAuthRouter({
   provider,
   issuerUrl,
   scopesSupported: ["mcp:tools"],
+  allowedRedirectUris: [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+  ],
 }));
 
 // Protected MCP endpoints
@@ -217,5 +272,6 @@ app.post("/messages", bearerAuth, express.json(), async (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`telegram-bot-mcp listening on :${PORT}`);
   console.log(`OAuth issuer: ${SERVER_URL}`);
+  console.log(`OAuth password: set`);
   console.log(`Default chat: ${DEFAULT_CHAT_ID || "(not set)"}`);
 });
