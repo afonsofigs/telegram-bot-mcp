@@ -222,7 +222,21 @@ app.use(mcpAuthRouter({
 const bearerAuth = requireBearerAuth({ provider });
 const transports = new Map();
 
-app.post("/mcp", bearerAuth, async (req, res) => {
+// Wrap bearerAuth to log what happens
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  console.log(`[auth] ${req.method} ${req.path} auth=${authHeader ? authHeader.slice(0, 20) + "..." : "none"}`);
+  bearerAuth(req, res, (err) => {
+    if (err) {
+      console.error(`[auth] rejected: ${err.message || err}`);
+    } else {
+      console.log(`[auth] accepted`);
+    }
+    next(err);
+  });
+};
+
+app.post("/mcp", authMiddleware, async (req, res) => {
   try {
     const sessionId = req.headers["mcp-session-id"];
     console.log(`[mcp] POST session=${sessionId || "new"} body=${JSON.stringify(req.body).slice(0, 200)}`);
@@ -250,7 +264,7 @@ app.post("/mcp", bearerAuth, async (req, res) => {
   }
 });
 
-app.get("/mcp", bearerAuth, async (req, res) => {
+app.get("/mcp", authMiddleware, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
   if (!sessionId || !transports.has(sessionId)) {
     return res.status(400).json({ error: "Missing or invalid session ID" });
@@ -258,7 +272,7 @@ app.get("/mcp", bearerAuth, async (req, res) => {
   await transports.get(sessionId).handleRequest(req, res);
 });
 
-app.delete("/mcp", bearerAuth, async (req, res) => {
+app.delete("/mcp", authMiddleware, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
   if (sessionId && transports.has(sessionId)) {
     await transports.get(sessionId).handleRequest(req, res);
