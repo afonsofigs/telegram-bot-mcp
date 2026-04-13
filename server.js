@@ -11,14 +11,9 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DEFAULT_CHAT_ID = process.env.TELEGRAM_DEFAULT_CHAT_ID || "";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
-const OAUTH_PASSWORD = process.env.OAUTH_PASSWORD;
 
 if (!BOT_TOKEN) {
   console.error("Error: TELEGRAM_BOT_TOKEN environment variable is required");
-  process.exit(1);
-}
-if (!OAUTH_PASSWORD) {
-  console.error("Error: OAUTH_PASSWORD environment variable is required");
   process.exit(1);
 }
 
@@ -52,9 +47,9 @@ function loginPage(pendingId, error) {
 
 // --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
 
-// Derive deterministic client credentials from OAUTH_PASSWORD
-const FIXED_CLIENT_ID = createHash("sha256").update(`${OAUTH_PASSWORD}:client_id`).digest("hex").slice(0, 36);
-const FIXED_CLIENT_SECRET = createHash("sha256").update(`${OAUTH_PASSWORD}:client_secret`).digest("hex");
+// Derive deterministic client credentials from BOT_TOKEN
+const FIXED_CLIENT_ID = createHash("sha256").update(`${BOT_TOKEN}:client_id`).digest("hex").slice(0, 36);
+const FIXED_CLIENT_SECRET = createHash("sha256").update(`${BOT_TOKEN}:client_secret`).digest("hex");
 
 class ClientsStore {
   constructor() {
@@ -97,7 +92,7 @@ class OAuthProvider {
       const pid = res.req.body.pending_id;
       const pending = this.codes.get(`pending:${pid}`);
 
-      if (!pending || submitted !== OAUTH_PASSWORD) {
+      if (!pending || submitted !== BOT_TOKEN) {
         res.status(403).send(loginPage(pendingId, true));
         return;
       }
