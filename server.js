@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -52,13 +52,30 @@ function loginPage(pendingId, error) {
 
 // --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
 
+// Derive deterministic client credentials from OAUTH_PASSWORD
+const FIXED_CLIENT_ID = createHash("sha256").update(`${OAUTH_PASSWORD}:client_id`).digest("hex").slice(0, 36);
+const FIXED_CLIENT_SECRET = createHash("sha256").update(`${OAUTH_PASSWORD}:client_secret`).digest("hex");
+
 class ClientsStore {
-  constructor() { this.clients = new Map(); }
-  async getClient(clientId) { return this.clients.get(clientId); }
-  async registerClient(metadata) {
-    const client = { ...metadata, client_id: metadata.client_id || randomUUID() };
-    this.clients.set(client.client_id, client);
-    return client;
+  constructor() {
+    // Pre-register the only allowed client
+    this.client = {
+      client_id: FIXED_CLIENT_ID,
+      client_secret: FIXED_CLIENT_SECRET,
+      redirect_uris: [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
+      ],
+      client_name: "Claude",
+      token_endpoint_auth_method: "client_secret_post",
+    };
+  }
+  async getClient(clientId) {
+    return clientId === FIXED_CLIENT_ID ? this.client : undefined;
+  }
+  async registerClient(_metadata) {
+    // Always return the fixed client — no new registrations
+    return this.client;
   }
 }
 
@@ -273,6 +290,7 @@ app.post("/messages", bearerAuth, express.json(), async (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`telegram-bot-mcp listening on :${PORT}`);
   console.log(`OAuth issuer: ${SERVER_URL}`);
-  console.log(`OAuth password: set`);
+  console.log(`OAuth client_id: ${FIXED_CLIENT_ID}`);
+  console.log(`OAuth client_secret: ${FIXED_CLIENT_SECRET}`);
   console.log(`Default chat: ${DEFAULT_CHAT_ID || "(not set)"}`);
 });
