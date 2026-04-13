@@ -223,21 +223,30 @@ const bearerAuth = requireBearerAuth({ provider });
 const transports = new Map();
 
 app.post("/mcp", bearerAuth, async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  if (sessionId && transports.has(sessionId)) {
-    const transport = transports.get(sessionId);
-    await transport.handleRequest(req, res, req.body);
-  } else {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-    transport.onclose = () => {
-      if (transport.sessionId) transports.delete(transport.sessionId);
-    };
-    const server = createMcpServer();
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-    if (transport.sessionId) transports.set(transport.sessionId, transport);
+  try {
+    const sessionId = req.headers["mcp-session-id"];
+    console.log(`[mcp] POST session=${sessionId || "new"} body=${JSON.stringify(req.body).slice(0, 200)}`);
+    if (sessionId && transports.has(sessionId)) {
+      const transport = transports.get(sessionId);
+      await transport.handleRequest(req, res, req.body);
+    } else {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) transports.delete(transport.sessionId);
+      };
+      const server = createMcpServer();
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      if (transport.sessionId) {
+        transports.set(transport.sessionId, transport);
+        console.log(`[mcp] new session: ${transport.sessionId}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[mcp] POST error: ${err.message}\n${err.stack}`);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
