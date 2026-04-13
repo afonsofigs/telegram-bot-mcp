@@ -218,20 +218,16 @@ app.use(mcpAuthRouter({
   scopesSupported: ["mcp:tools"],
 }));
 
-// Streamable HTTP transport for MCP
+// Streamable HTTP transport for MCP on /mcp
 const bearerAuth = requireBearerAuth({ provider });
 const transports = new Map();
 
-// Streamable HTTP handler — serves /mcp and /sse (claude.ai uses /sse path)
-async function handlePost(req, res) {
+app.post("/mcp", bearerAuth, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
-
   if (sessionId && transports.has(sessionId)) {
-    // Existing session
     const transport = transports.get(sessionId);
     await transport.handleRequest(req, res, req.body);
   } else {
-    // New session
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
     });
@@ -245,33 +241,23 @@ async function handlePost(req, res) {
   }
 });
 
-async function handleGet(req, res) {
+app.get("/mcp", bearerAuth, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
   if (!sessionId || !transports.has(sessionId)) {
-    res.status(400).json({ error: "Missing or invalid session ID" });
-    return;
+    return res.status(400).json({ error: "Missing or invalid session ID" });
   }
-  const transport = transports.get(sessionId);
-  await transport.handleRequest(req, res);
+  await transports.get(sessionId).handleRequest(req, res);
 });
 
-async function handleDelete(req, res) {
+app.delete("/mcp", bearerAuth, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
   if (sessionId && transports.has(sessionId)) {
-    const transport = transports.get(sessionId);
-    await transport.handleRequest(req, res);
+    await transports.get(sessionId).handleRequest(req, res);
     transports.delete(sessionId);
   } else {
     res.status(404).json({ error: "Session not found" });
   }
 });
-
-// Mount on both /mcp and /sse paths
-for (const path of ["/mcp", "/sse"]) {
-  app.post(path, bearerAuth, handlePost);
-  app.get(path, bearerAuth, handleGet);
-  app.delete(path, bearerAuth, handleDelete);
-}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`telegram-bot-mcp listening on :${PORT}`);
