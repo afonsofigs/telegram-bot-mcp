@@ -219,21 +219,29 @@ app.use(mcpAuthRouter({
 }));
 
 // Streamable HTTP transport for MCP on /mcp
-const bearerAuth = requireBearerAuth({ provider });
 const transports = new Map();
 
-// Wrap bearerAuth to log what happens
-const authMiddleware = (req, res, next) => {
+// Manual bearer auth (replaces SDK's requireBearerAuth for better control)
+const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   console.log(`[auth] ${req.method} ${req.path} auth=${authHeader ? authHeader.slice(0, 20) + "..." : "none"}`);
-  bearerAuth(req, res, (err) => {
-    if (err) {
-      console.error(`[auth] rejected: ${err.message || err}`);
-    } else {
-      console.log(`[auth] accepted`);
-    }
-    next(err);
-  });
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.log(`[auth] no bearer token, sending 401`);
+    res.status(401).set("WWW-Authenticate", 'Bearer error="invalid_token"').json({ error: "Missing token" });
+    return;
+  }
+
+  const token = authHeader.slice(7);
+  try {
+    const authInfo = await provider.verifyAccessToken(token);
+    console.log(`[auth] accepted clientId=${authInfo.clientId}`);
+    req.auth = authInfo;
+    next();
+  } catch (err) {
+    console.log(`[auth] rejected: ${err.message}`);
+    res.status(401).set("WWW-Authenticate", `Bearer error="invalid_token"`).json({ error: err.message });
+  }
 };
 
 app.post("/mcp", authMiddleware, async (req, res) => {
