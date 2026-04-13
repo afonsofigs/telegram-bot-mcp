@@ -2,12 +2,12 @@
 
 ## What is this?
 
-A self-hosted MCP server that sends Telegram messages via Bot API. One tool: `send_message`. Protected by OAuth 2.1 with password-based authorization.
+A self-hosted MCP server that sends Telegram messages via Bot API. One tool: `send_message`. Protected by OAuth 2.1 with credentials derived from the bot token.
 
 ## Stack
 
 - Node.js (ESM), single file: `server.js`
-- `@modelcontextprotocol/sdk` — MCP protocol + OAuth handlers
+- `@modelcontextprotocol/sdk` — MCP protocol, OAuth handlers, Streamable HTTP transport
 - `node-telegram-bot-api` — Telegram Bot API
 - `express` — HTTP server
 - `zod` — schema validation
@@ -30,11 +30,12 @@ TELEGRAM_BOT_TOKEN=token SERVER_URL=http://localhost:3000 node server.js
 
 ## Key design decisions
 
-- **OAuth 2.1 in-memory** — Tokens are stored in memory. Single-instance only. If the pod restarts, clients must re-authorize. Acceptable for personal use.
-- **Fixed client credentials** — `client_id` and `client_secret` are derived from `TELEGRAM_BOT_TOKEN` via SHA-256. No dynamic registration from unknown clients. Deterministic across restarts.
-- **Password-protected authorize** — The `/authorize` endpoint shows a login page. Password is also derived from `TELEGRAM_BOT_TOKEN`.
-- **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted.
-- **No polling** — The bot is created with `node-telegram-bot-api` in non-polling mode (only sends, never receives).
+- **OAuth 2.1 in-memory** — Tokens and clients stored in memory. Single-instance only. If the pod restarts, clients must re-authorize.
+- **Fixed client credentials** — `client_id` and `client_secret` derived from `TELEGRAM_BOT_TOKEN` via SHA-256. No dynamic registration from unknown clients. Deterministic across restarts.
+- **Auto-approve authorize** — No login page. Security enforced by fixed client credentials. Only someone with the bot token can derive matching credentials.
+- **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs accepted.
+- **Manual bearer auth** — Uses custom middleware instead of SDK's `requireBearerAuth` for better logging and control.
+- **No polling** — Bot created in non-polling mode (only sends, never receives).
 
 ## Common tasks
 

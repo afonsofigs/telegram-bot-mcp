@@ -9,8 +9,8 @@ There are many Telegram MCP servers, but they all use MTProto (your personal Tel
 ## Features
 
 - **One tool**: `send_message` — send text to any Telegram chat
-- **OAuth 2.1**: Password-protected authorization flow (RFC 8414, RFC 7591, PKCE)
-- **HTTP transport**: Streamable HTTP endpoint for remote MCP connections (Claude.ai connectors, etc.)
+- **OAuth 2.1**: Fixed client credentials derived from bot token — no separate passwords needed
+- **Streamable HTTP**: `/mcp` endpoint for remote MCP connections (Claude.ai connectors, etc.)
 - **Auto-split**: Messages over 4096 chars are split automatically
 - **Docker**: Ready to deploy on K8s, Fly.io, Railway, etc.
 
@@ -71,35 +71,27 @@ Send a text message to a Telegram chat via Bot API.
 
 This server implements **OAuth 2.1** with:
 
-- **Fixed client credentials** — A single `client_id` and `client_secret` are derived deterministically from `TELEGRAM_BOT_TOKEN`. No dynamic registration from unknown clients.
+- **Fixed client credentials** — A single `client_id` and `client_secret` are derived deterministically from `TELEGRAM_BOT_TOKEN`. Printed to stdout on startup.
+- **Auto-approve** — The `/authorize` endpoint auto-approves requests. Security is enforced by the fixed client credentials — only someone with the bot token can derive them.
 - **PKCE** (S256) — Proof Key for Code Exchange, mandatory for all clients
-- **Password-protected authorize** — When a client requests authorization, a login page is shown requiring a password (derived from `TELEGRAM_BOT_TOKEN`)
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted
 
-### Setup
+### How it works
 
-On startup, the server prints the `client_id` and `client_secret` to stdout. Use these when configuring your MCP connector.
-
-### Flow
-
-1. MCP client (e.g., Claude.ai) discovers OAuth metadata via `/.well-known/oauth-authorization-server`
-2. Client uses the fixed `client_id` and `client_secret` (from server logs)
-3. Client redirects user to `/authorize` with PKCE challenge
-4. User sees login page, enters password
-5. Server issues authorization code, redirects back to client
-6. Client exchanges code for access token via `/token`
-7. Client uses access token in `Authorization: Bearer <token>` header for `/mcp`
-
-No one can use the MCP tools without the bot token-derived credentials.
+1. On startup, the server derives a unique `client_id` and `client_secret` from your bot token and prints them
+2. You enter these credentials when adding the connector in Claude.ai
+3. Claude.ai completes the OAuth flow automatically (no manual approval needed)
+4. Only someone with your bot token can generate matching credentials
 
 ## Claude.ai Connector Setup
 
 1. Deploy this server with HTTPS (e.g., behind Cloudflare Tunnel, nginx, or a cloud provider)
-2. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
-3. Click **Add custom connector**
-4. Enter the URL: `https://your-domain.com/mcp`
-5. Claude.ai will redirect to the authorization page — enter the password from the server logs
-6. The connector is now linked and available in conversations and scheduled tasks
+2. Check the server logs for `client_id` and `client_secret`
+3. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
+4. Click **Add custom connector**
+5. Enter the URL: `https://your-domain.com/mcp`
+6. Enter the `client_id` and `client_secret` from the logs
+7. The connector links automatically — available in conversations and scheduled tasks
 
 ## Endpoints
 
@@ -108,13 +100,12 @@ No one can use the MCP tools without the bot token-derived credentials.
 | `GET /health` | No | Health check |
 | `GET /.well-known/oauth-authorization-server` | No | OAuth metadata (RFC 8414) |
 | `GET /.well-known/oauth-protected-resource` | No | Protected resource metadata (RFC 9728) |
-| `POST /register` | No | Dynamic client registration (RFC 7591) |
-| `GET /authorize` | No | OAuth authorization (shows login page) |
-| `POST /authorize` | No | OAuth authorization (password submission) |
+| `POST /register` | No | Client registration (returns fixed client) |
+| `GET /authorize` | No | OAuth authorization (auto-approve) |
 | `POST /token` | No | Token exchange |
 | `POST /revoke` | Bearer | Token revocation |
 | `POST /mcp` | Bearer | Streamable HTTP — MCP requests |
-| `GET /mcp` | Bearer | Streamable HTTP — server notifications (SSE) |
+| `GET /mcp` | Bearer | Streamable HTTP — server notifications |
 | `DELETE /mcp` | Bearer | Session termination |
 
 ## Kubernetes Deployment
@@ -167,7 +158,7 @@ Claude.ai / MCP Client
 
 ## Dependencies
 
-- [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) — Official MCP TypeScript SDK (includes OAuth server handlers)
+- [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) — Official MCP TypeScript SDK (OAuth + Streamable HTTP)
 - [node-telegram-bot-api](https://github.com/yagop/node-telegram-bot-api) (9000+ stars) — Telegram Bot API client
 - [express](https://expressjs.com/) — HTTP server
 - [zod](https://zod.dev/) — Schema validation
