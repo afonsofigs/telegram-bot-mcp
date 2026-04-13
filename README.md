@@ -10,7 +10,7 @@ There are many Telegram MCP servers, but they all use MTProto (your personal Tel
 
 - **One tool**: `send_message` — send text to any Telegram chat
 - **OAuth 2.1**: Password-protected authorization flow (RFC 8414, RFC 7591, PKCE)
-- **HTTP transport**: SSE endpoint for remote MCP connections (Claude.ai connectors, etc.)
+- **HTTP transport**: Streamable HTTP endpoint for remote MCP connections (Claude.ai connectors, etc.)
 - **Auto-split**: Messages over 4096 chars are split automatically
 - **Docker**: Ready to deploy on K8s, Fly.io, Railway, etc.
 
@@ -88,7 +88,7 @@ On startup, the server prints the `client_id` and `client_secret` to stdout. Use
 4. User sees login page, enters password
 5. Server issues authorization code, redirects back to client
 6. Client exchanges code for access token via `/token`
-7. Client uses access token in `Authorization: Bearer <token>` header for `/sse` and `/messages`
+7. Client uses access token in `Authorization: Bearer <token>` header for `/mcp`
 
 No one can use the MCP tools without the bot token-derived credentials.
 
@@ -97,7 +97,7 @@ No one can use the MCP tools without the bot token-derived credentials.
 1. Deploy this server with HTTPS (e.g., behind Cloudflare Tunnel, nginx, or a cloud provider)
 2. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
 3. Click **Add custom connector**
-4. Enter the URL: `https://your-domain.com/sse`
+4. Enter the URL: `https://your-domain.com/mcp`
 5. Claude.ai will redirect to the authorization page — enter the password from the server logs
 6. The connector is now linked and available in conversations and scheduled tasks
 
@@ -113,8 +113,9 @@ No one can use the MCP tools without the bot token-derived credentials.
 | `POST /authorize` | No | OAuth authorization (password submission) |
 | `POST /token` | No | Token exchange |
 | `POST /revoke` | Bearer | Token revocation |
-| `GET /sse` | Bearer | SSE transport for MCP |
-| `POST /messages` | Bearer | MCP message endpoint |
+| `POST /mcp` | Bearer | Streamable HTTP — MCP requests |
+| `GET /mcp` | Bearer | Streamable HTTP — server notifications (SSE) |
+| `DELETE /mcp` | Bearer | Session termination |
 
 ## Kubernetes Deployment
 
@@ -154,7 +155,7 @@ Expose via ClusterIP Service + Cloudflare Tunnel (or any HTTPS reverse proxy).
 ```
 Claude.ai / MCP Client
         |
-        v (HTTPS + OAuth 2.1)
+        v (HTTPS + OAuth 2.1 + Streamable HTTP)
   telegram-bot-mcp
         |
         v (HTTPS)
