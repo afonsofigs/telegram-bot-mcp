@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -19,10 +20,47 @@ if (!BOT_TOKEN) {
 
 const bot = new TelegramBot(BOT_TOKEN);
 
-// --- OAuth 2.1 Provider (in-memory, suitable for single-instance) ---
+// --- OAuth 2.1 Provider (file-persisted, survives pod restarts) ---
+
+const TOKEN_STORE_PATH = process.env.TOKEN_STORE_PATH || "/data/oauth-tokens.json";
 
 const FIXED_CLIENT_ID = createHash("sha256").update(`${BOT_TOKEN}:client_id`).digest("hex").slice(0, 36);
 const FIXED_CLIENT_SECRET = createHash("sha256").update(`${BOT_TOKEN}:client_secret`).digest("hex");
+
+class TokenStore {
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.data = { tokens: {}, codes: {} };
+    this._load();
+  }
+
+  _load() {
+    try {
+      if (existsSync(this.filePath)) {
+        this.data = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      }
+    } catch (err) {
+      console.warn(`[tokenstore] Failed to load ${this.filePath}: ${err.message}, starting fresh`);
+      this.data = { tokens: {}, codes: {} };
+    }
+  }
+
+  _save() {
+    try {
+      writeFileSync(this.filePath, JSON.stringify(this.data));
+    } catch (err) {
+      console.error(`[tokenstore] Failed to save ${this.filePath}: ${err.message}`);
+    }
+  }
+
+  getToken(key) { return this.data.tokens[key]; }
+  setToken(key, value) { this.data.tokens[key] = value; this._save(); }
+  deleteToken(key) { delete this.data.tokens[key]; this._save(); }
+
+  getCode(key) { return this.data.codes[key]; }
+  setCode(key, value) { this.data.codes[key] = value; this._save(); }
+  deleteCode(key) { delete this.data.codes[key]; this._save(); }
+}
 
 class ClientsStore {
   constructor() {
@@ -46,16 +84,15 @@ class ClientsStore {
 }
 
 class OAuthProvider {
-  constructor() {
+  constructor(store) {
     this.clientsStore = new ClientsStore();
-    this.codes = new Map();
-    this.tokens = new Map();
+    this.store = store;
   }
 
   async authorize(client, params, res) {
     console.log(`[oauth] authorize: client=${client.client_id} redirect=${params.redirectUri}`);
     const code = randomUUID();
-    this.codes.set(code, { client, params, createdAt: Date.now() });
+    this.store.setCode(code, { client, params, createdAt: Date.now() });
 
     const searchParams = new URLSearchParams({ code });
     if (params.state) searchParams.set("state", params.state);
@@ -66,29 +103,29 @@ class OAuthProvider {
   }
 
   async challengeForAuthorizationCode(_client, code) {
-    const data = this.codes.get(code);
+    const data = this.store.getCode(code);
     if (!data) throw new Error("Invalid authorization code");
     return data.params.codeChallenge;
   }
 
   async exchangeAuthorizationCode(client, code, _codeVerifier) {
     console.log(`[oauth] exchangeCode: client=${client.client_id} code=${code.slice(0, 8)}...`);
-    const data = this.codes.get(code);
+    const data = this.store.getCode(code);
     if (!data) throw new Error("Invalid authorization code");
     if (data.client.client_id !== client.client_id) throw new Error("Client mismatch");
-    this.codes.delete(code);
+    this.store.deleteCode(code);
 
     const accessToken = randomUUID();
     const refreshToken = randomUUID();
     const expiresIn = 86400;
 
-    this.tokens.set(accessToken, {
+    this.store.setToken(accessToken, {
       clientId: client.client_id,
       scopes: data.params.scopes || [],
       expiresAt: Date.now() + expiresIn * 1000,
       resource: data.params.resource,
     });
-    this.tokens.set(refreshToken, {
+    this.store.setToken(refreshToken, {
       clientId: client.client_id,
       scopes: data.params.scopes || [],
       type: "refresh",
@@ -104,21 +141,21 @@ class OAuthProvider {
   }
 
   async exchangeRefreshToken(client, refreshToken, scopes, _resource) {
-    const data = this.tokens.get(refreshToken);
+    const data = this.store.getToken(refreshToken);
     if (!data || data.type !== "refresh") throw new Error("Invalid refresh token");
     if (data.clientId !== client.client_id) throw new Error("Client mismatch");
-    this.tokens.delete(refreshToken);
+    this.store.deleteToken(refreshToken);
 
     const newAccessToken = randomUUID();
     const newRefreshToken = randomUUID();
     const expiresIn = 86400;
 
-    this.tokens.set(newAccessToken, {
+    this.store.setToken(newAccessToken, {
       clientId: client.client_id,
       scopes: scopes || data.scopes,
       expiresAt: Date.now() + expiresIn * 1000,
     });
-    this.tokens.set(newRefreshToken, {
+    this.store.setToken(newRefreshToken, {
       clientId: client.client_id,
       scopes: scopes || data.scopes,
       type: "refresh",
@@ -135,10 +172,10 @@ class OAuthProvider {
 
   async verifyAccessToken(token) {
     console.log(`[oauth] verifyToken: ${token.slice(0, 8)}...`);
-    const data = this.tokens.get(token);
+    const data = this.store.getToken(token);
     if (!data || data.type === "refresh") throw new Error("Invalid token");
     if (data.expiresAt && data.expiresAt < Date.now()) {
-      this.tokens.delete(token);
+      this.store.deleteToken(token);
       throw new Error("Token expired");
     }
     return {
@@ -151,7 +188,7 @@ class OAuthProvider {
   }
 
   async revokeToken(token) {
-    this.tokens.delete(token);
+    this.store.deleteToken(token);
   }
 }
 
@@ -195,7 +232,8 @@ function createMcpServer() {
 
 // --- Express App ---
 
-const provider = new OAuthProvider();
+const tokenStore = new TokenStore(TOKEN_STORE_PATH);
+const provider = new OAuthProvider(tokenStore);
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json());
