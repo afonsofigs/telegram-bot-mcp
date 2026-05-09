@@ -30,7 +30,7 @@ TELEGRAM_BOT_TOKEN=token SERVER_URL=http://localhost:3000 node server.js
 
 ## Key design decisions
 
-- **OAuth 2.1 in-memory** — Tokens and clients stored in memory. Single-instance only. If the pod restarts, clients must re-authorize.
+- **OAuth 2.1 file-persisted** — Tokens and authorization codes stored in `TOKEN_STORE_PATH` (default `/data/oauth-tokens.json`) via `TokenStore`. Single-instance only (no shared store across replicas), but clients survive pod restarts as long as the path is on a mounted volume.
 - **Fixed client credentials** — `client_id` and `client_secret` derived from `TELEGRAM_BOT_TOKEN` via SHA-256. No dynamic registration from unknown clients. Deterministic across restarts.
 - **Auto-approve authorize** — No login page. Security enforced by fixed client credentials. Only someone with the bot token can derive matching credentials.
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs accepted.
