@@ -10,6 +10,7 @@ There are many Telegram MCP servers, but they all use MTProto (your personal Tel
 
 - **One tool**: `send_message` — send text to any Telegram chat
 - **OAuth 2.1**: Fixed client credentials derived from bot token — no separate passwords needed
+- **Persistent OAuth tokens**: Issued tokens are written to disk so they survive container/pod restarts (no re-auth in Claude.ai after redeploys)
 - **Streamable HTTP**: `/mcp` endpoint for remote MCP connections (Claude.ai connectors, etc.)
 - **Auto-split**: Messages over 4096 chars are split automatically
 - **Docker**: Ready to deploy on K8s, Fly.io, Railway, etc.
@@ -53,6 +54,7 @@ node server.js
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather (also used to derive OAuth credentials) |
 | `SERVER_URL` | Yes | Public HTTPS URL of this server (used as OAuth issuer) |
 | `TELEGRAM_DEFAULT_CHAT_ID` | No | Default chat ID for messages |
+| `TOKEN_STORE_PATH` | No | Path for persisted OAuth tokens (default: `/data/oauth-tokens.json`). Mount a writable volume at this directory to survive restarts. |
 | `PORT` | No | Server port (default: 3000) |
 
 ## MCP Tool
@@ -75,6 +77,7 @@ This server implements **OAuth 2.1** with:
 - **Auto-approve** — The `/authorize` endpoint auto-approves requests. Security is enforced by the fixed client credentials — only someone with the bot token can derive them.
 - **PKCE** (S256) — Proof Key for Code Exchange, mandatory for all clients
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted
+- **File-persisted token store** — Authorization codes and bearer/refresh tokens are written to `TOKEN_STORE_PATH` (default `/data/oauth-tokens.json`) on every mutation. Mount a volume at that location so connectors don't have to re-auth after pod restarts. If no volume is mounted, the path falls back to ephemeral container storage.
 
 ### How it works
 
@@ -111,6 +114,16 @@ This server implements **OAuth 2.1** with:
 ## Kubernetes Deployment
 
 ```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: telegram-mcp-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -122,6 +135,8 @@ spec:
       app: telegram-mcp
   template:
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: telegram-mcp
           image: ghcr.io/afonsofigs/telegram-bot-mcp:latest
@@ -137,9 +152,18 @@ spec:
               value: "https://your-domain.com"
             - name: TELEGRAM_DEFAULT_CHAT_ID
               value: "your_chat_id"
+            - name: TOKEN_STORE_PATH
+              value: "/data/oauth-tokens.json"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: telegram-mcp-data
 ```
 
-Expose via ClusterIP Service + Cloudflare Tunnel (or any HTTPS reverse proxy).
+Expose via ClusterIP Service + Cloudflare Tunnel (or any HTTPS reverse proxy). The PVC is what allows OAuth tokens to survive pod restarts — without it, Claude.ai will need to re-auth every time the pod is recreated.
 
 ## Architecture
 
