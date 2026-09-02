@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import express from "express";
-import TelegramBot from "node-telegram-bot-api";
+import { Api } from "node-telegram-bot-api";
 import { z } from "zod";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -18,7 +18,9 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-const bot = new TelegramBot(BOT_TOKEN);
+// Api is the bare Bot API client. We only ever send, never receive updates, so
+// there is no need for Bot and its middleware chain.
+const telegram = new Api(BOT_TOKEN);
 
 // --- OAuth 2.1 Provider (file-persisted, survives pod restarts) ---
 
@@ -217,7 +219,11 @@ function createMcpServer() {
 
         const ids = [];
         for (const chunk of chunks) {
-          const msg = await bot.sendMessage(targetChat, chunk, parse_mode ? { parse_mode } : {});
+          const msg = await telegram.sendMessage({
+            chat_id: targetChat,
+            text: chunk,
+            ...(parse_mode ? { parse_mode } : {}),
+          });
           ids.push(msg.message_id);
         }
         return { content: [{ type: "text", text: `Sent ${chunks.length} message(s) to ${targetChat}` }] };
