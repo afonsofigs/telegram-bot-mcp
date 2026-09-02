@@ -1,6 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended"
+  ],
   "description": [
     "minimumReleaseAge holds every update back for 5 days. Both upstreams this",
     "family of wrappers depends on have shipped releases that were broken on",
@@ -13,7 +15,9 @@
     "accident rather than on purpose."
   ],
   "timezone": "Europe/Lisbon",
-  "schedule": ["before 6am on monday"],
+  "schedule": [
+    "before 6am on monday"
+  ],
   "dependencyDashboard": true,
   "rangeStrategy": "pin",
   "minimumReleaseAge": "5 days",
@@ -25,8 +29,21 @@
         "express",
         "zod"
       ],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "proxy dependencies"
+    },
+    {
+      "description": "Overrides exist to pull patched releases of transitives INSIDE the major their parent expects (fastmcp wants undici 7, fast-uri 3, @hono/node-server 1). A major bump here breaks the backend, which is the exact failure mode that forced obsidian-sync-mcp 0.6.5. Security patches still come through as minor/patch.",
+      "matchDepTypes": [
+        "overrides"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ]
 }
