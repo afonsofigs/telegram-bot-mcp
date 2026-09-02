@@ -1,0 +1,32 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": [
+    "minimumReleaseAge holds every update back for 5 days. Both upstreams this",
+    "family of wrappers depends on have shipped releases that were broken on",
+    "arrival and fixed days later: obsidian-sync-mcp 0.6.4 broke every session",
+    "for current Claude clients and was superseded in 1 day, and",
+    "@delorenj/mcp-server-trello 1.8.0 published a package that could not start",
+    "and was fixed in 4 days. A 5-day soak would have skipped both.",
+    "rangeStrategy pin because caret ranges are what let production sit months",
+    "behind: the image is only rebuilt on push, so a range is re-resolved by",
+    "accident rather than on purpose."
+  ],
+  "timezone": "Europe/Lisbon",
+  "schedule": ["before 6am on monday"],
+  "dependencyDashboard": true,
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "5 days",
+  "packageRules": [
+    {
+      "description": "Proxy plumbing moves together; the upstream MCP gets its own PR.",
+      "matchPackageNames": [
+        "@modelcontextprotocol/sdk",
+        "express",
+        "zod"
+      ],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "proxy dependencies"
+    }
+  ]
+}
