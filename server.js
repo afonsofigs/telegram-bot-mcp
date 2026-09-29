@@ -265,6 +265,16 @@ app.use(mcpAuthRouter({
 // Streamable HTTP transport for MCP on /mcp
 const transports = new Map();
 
+/**
+ * Sessions live in memory, so a restart forgets every one of them while the
+ * clients still hold their ids. The spec's answer is 404, which tells a
+ * client to initialize a new session. Handing the request to a fresh
+ * transport instead gets a 400 "Server not initialized", and a claude.ai chat
+ * that was open across the restart then fails its tool calls outright.
+ */
+const unknownSession = (res) =>
+  res.status(404).json({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null });
+
 // Manual bearer auth (replaces SDK's requireBearerAuth for better control)
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -295,6 +305,8 @@ app.post("/mcp", authMiddleware, async (req, res) => {
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId);
       await transport.handleRequest(req, res, req.body);
+    } else if (sessionId) {
+      unknownSession(res);
     } else {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
@@ -318,9 +330,8 @@ app.post("/mcp", authMiddleware, async (req, res) => {
 
 app.get("/mcp", authMiddleware, async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
-  if (!sessionId || !transports.has(sessionId)) {
-    return res.status(400).json({ error: "Missing or invalid session ID" });
-  }
+  if (!sessionId) return res.status(400).json({ error: "Missing session ID" });
+  if (!transports.has(sessionId)) return unknownSession(res);
   await transports.get(sessionId).handleRequest(req, res);
 });
 
