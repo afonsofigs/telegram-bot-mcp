@@ -9,7 +9,7 @@ There are many Telegram MCP servers, but they all use MTProto (your personal Tel
 ## Features
 
 - **One tool**: `send_message` — send text to any Telegram chat
-- **OAuth 2.1**: Fixed client credentials derived from bot token — no separate passwords needed
+- **OAuth 2.1**: Fixed client credentials derived from `MCP_SECRET` — no user database
 - **Persistent OAuth tokens**: Issued tokens are written to disk so they survive container/pod restarts (no re-auth in Claude.ai after redeploys)
 - **Streamable HTTP**: `/mcp` endpoint for remote MCP connections (Claude.ai connectors, etc.)
 - **Auto-split**: Messages over 4096 chars are split automatically
@@ -28,6 +28,7 @@ Get your chat ID by messaging [@userinfobot](https://t.me/userinfobot) on Telegr
 ```bash
 docker run -d \
   -e TELEGRAM_BOT_TOKEN=your_bot_token \
+  -e MCP_SECRET=$(openssl rand -hex 32) \
   -e TELEGRAM_DEFAULT_CHAT_ID=your_chat_id \
   -e SERVER_URL=https://your-domain.com \
   -p 3000:3000 \
@@ -42,6 +43,7 @@ cd telegram-bot-mcp
 npm install
 
 TELEGRAM_BOT_TOKEN=your_token \
+MCP_SECRET=$(openssl rand -hex 32) \
 TELEGRAM_DEFAULT_CHAT_ID=your_chat_id \
 SERVER_URL=https://your-domain.com \
 node server.js
@@ -51,7 +53,8 @@ node server.js
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather (also used to derive OAuth credentials) |
+| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
+| `MCP_SECRET` | Yes | Secret used to derive the OAuth credentials (e.g. `openssl rand -hex 32`). Rotating it revokes every issued token. |
 | `SERVER_URL` | Yes | Public HTTPS URL of this server (used as OAuth issuer) |
 | `TELEGRAM_DEFAULT_CHAT_ID` | No | Default chat ID for messages |
 | `TOKEN_STORE_PATH` | No | Path for persisted OAuth tokens (default: `/data/oauth-tokens.json`). Mount a writable volume at this directory to survive restarts. |
@@ -73,18 +76,20 @@ Send a text message to a Telegram chat via Bot API.
 
 This server implements **OAuth 2.1** with:
 
-- **Fixed client credentials** — A single `client_id` and `client_secret` are derived deterministically from `TELEGRAM_BOT_TOKEN`. Printed to stdout on startup.
-- **Auto-approve** — The `/authorize` endpoint auto-approves requests. Security is enforced by the fixed client credentials — only someone with the bot token can derive them.
+- **Fixed client credentials** — A single `client_id` and `client_secret` are derived deterministically from `MCP_SECRET` via SHA-256. Printed to stdout on startup. No dynamic client registration (`/register` is neither served nor advertised), no user database: the credentials only reach a client by being pasted into its settings.
+- **Rotating `MCP_SECRET` revokes everything**: on startup, codes and tokens issued to the previous `client_id` are dropped from the token store, and a bearer token of another client is refused.
+- **Revocation**: `POST /revoke` (RFC 7009) revokes an access or refresh token, only when it belongs to the authenticated client.
+- **Auto-approve** — The `/authorize` endpoint auto-approves requests. Security is enforced by the fixed client credentials — only someone with `MCP_SECRET` can derive them.
 - **PKCE** (S256) — Proof Key for Code Exchange, mandatory for all clients
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs are accepted
 - **File-persisted token store** — Authorization codes and bearer/refresh tokens are written to `TOKEN_STORE_PATH` (default `/data/oauth-tokens.json`) on every mutation. Mount a volume at that location so connectors don't have to re-auth after pod restarts. If no volume is mounted, the path falls back to ephemeral container storage.
 
 ### How it works
 
-1. On startup, the server derives a unique `client_id` and `client_secret` from your bot token and prints them
-2. You enter these credentials when adding the connector in Claude.ai
+1. On startup, the server derives a unique `client_id` and `client_secret` from `MCP_SECRET` and prints them
+2. You paste these credentials into the connector's **Advanced settings** when adding it in Claude.ai
 3. Claude.ai completes the OAuth flow automatically (no manual approval needed)
-4. Only someone with your bot token can generate matching credentials
+4. Only someone with `MCP_SECRET` can generate matching credentials
 
 ## Claude.ai Connector Setup
 
@@ -93,7 +98,7 @@ This server implements **OAuth 2.1** with:
 3. Go to [claude.ai/settings/connectors](https://claude.ai/settings/connectors)
 4. Click **Add custom connector**
 5. Enter the URL: `https://your-domain.com/mcp`
-6. Enter the `client_id` and `client_secret` from the logs
+6. Open **Advanced settings** and paste the `client_id` and `client_secret` from the logs there. They have to be entered by hand: the server does not support dynamic client registration, so a connector added without them cannot link.
 7. The connector links automatically — available in conversations and scheduled tasks
 
 ## Endpoints
@@ -103,10 +108,9 @@ This server implements **OAuth 2.1** with:
 | `GET /health` | No | Health check |
 | `GET /.well-known/oauth-authorization-server` | No | OAuth metadata (RFC 8414) |
 | `GET /.well-known/oauth-protected-resource` | No | Protected resource metadata (RFC 9728) |
-| `POST /register` | No | Client registration (returns fixed client) |
 | `GET /authorize` | No | OAuth authorization (auto-approve) |
-| `POST /token` | No | Token exchange |
-| `POST /revoke` | Bearer | Token revocation |
+| `POST /token` | Client credentials | Token exchange |
+| `POST /revoke` | Client credentials | Token revocation (RFC 7009) |
 | `POST /mcp` | Bearer | Streamable HTTP — MCP requests |
 | `GET /mcp` | Bearer | Streamable HTTP — server notifications |
 | `DELETE /mcp` | Bearer | Session termination |
@@ -148,6 +152,11 @@ spec:
                 secretKeyRef:
                   name: telegram-mcp-secrets
                   key: TELEGRAM_BOT_TOKEN
+            - name: MCP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: telegram-mcp-secrets
+                  key: MCP_SECRET
             - name: SERVER_URL
               value: "https://your-domain.com"
             - name: TELEGRAM_DEFAULT_CHAT_ID

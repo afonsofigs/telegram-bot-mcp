@@ -9,12 +9,15 @@ import { Api } from "node-telegram-bot-api";
 import { z } from "zod";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const MCP_SECRET = process.env.MCP_SECRET;
 const DEFAULT_CHAT_ID = process.env.TELEGRAM_DEFAULT_CHAT_ID || "";
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
-if (!BOT_TOKEN) {
-  console.error("Error: TELEGRAM_BOT_TOKEN environment variable is required");
+const required = { TELEGRAM_BOT_TOKEN: BOT_TOKEN, MCP_SECRET };
+const missing = Object.entries(required).filter(([, v]) => !v).map(([k]) => k);
+if (missing.length) {
+  console.error(`Error: missing required environment variables: ${missing.join(", ")}`);
   process.exit(1);
 }
 
@@ -26,8 +29,8 @@ const telegram = new Api(BOT_TOKEN);
 
 const TOKEN_STORE_PATH = process.env.TOKEN_STORE_PATH || "/data/oauth-tokens.json";
 
-const FIXED_CLIENT_ID = createHash("sha256").update(`${BOT_TOKEN}:client_id`).digest("hex").slice(0, 36);
-const FIXED_CLIENT_SECRET = createHash("sha256").update(`${BOT_TOKEN}:client_secret`).digest("hex");
+const FIXED_CLIENT_ID = createHash("sha256").update(`${MCP_SECRET}:client_id`).digest("hex").slice(0, 36);
+const FIXED_CLIENT_SECRET = createHash("sha256").update(`${MCP_SECRET}:client_secret`).digest("hex");
 
 class TokenStore {
   constructor(filePath) {
@@ -44,6 +47,28 @@ class TokenStore {
     } catch (err) {
       console.warn(`[tokenstore] Failed to load ${this.filePath}: ${err.message}, starting fresh`);
       this.data = { tokens: {}, codes: {} };
+    }
+    this._dropForeign();
+  }
+
+  /**
+   * The client id is derived from MCP_SECRET, so rotating the secret must
+   * revoke everything issued before it. Every record names its client (tokens
+   * by `clientId`, codes by `client.client_id`); one that names another
+   * client, or none, is dropped.
+   */
+  _dropForeign() {
+    const { tokens = {}, codes = {} } = this.data;
+    const keep = (entries, idOf) => Object.fromEntries(entries.filter(([, v]) => idOf(v) === FIXED_CLIENT_ID));
+    this.data = {
+      tokens: keep(Object.entries(tokens), (v) => v?.clientId),
+      codes: keep(Object.entries(codes), (v) => v?.client?.client_id),
+    };
+    const dropped = Object.keys(tokens).length + Object.keys(codes).length -
+      Object.keys(this.data.tokens).length - Object.keys(this.data.codes).length;
+    if (dropped) {
+      console.log(`[tokenstore] Dropped ${dropped} record(s) issued to another client (MCP_SECRET rotated)`);
+      this._save();
     }
   }
 
@@ -77,11 +102,11 @@ class ClientsStore {
       token_endpoint_auth_method: "client_secret_post",
     };
   }
+  // No registerClient: without it the SDK neither mounts nor advertises
+  // /register, which would hand the fixed client_secret to anyone who asked.
+  // The credentials are entered by hand in the connector's settings.
   async getClient(clientId) {
     return clientId === FIXED_CLIENT_ID ? this.client : undefined;
-  }
-  async registerClient(_metadata) {
-    return this.client;
   }
 }
 
@@ -175,7 +200,7 @@ class OAuthProvider {
   async verifyAccessToken(token) {
     console.log(`[oauth] verifyToken: ${token.slice(0, 8)}...`);
     const data = this.store.getToken(token);
-    if (!data || data.type === "refresh") throw new Error("Invalid token");
+    if (!data || data.type === "refresh" || data.clientId !== FIXED_CLIENT_ID) throw new Error("Invalid token");
     if (data.expiresAt && data.expiresAt < Date.now()) {
       this.store.deleteToken(token);
       throw new Error("Token expired");
@@ -189,8 +214,10 @@ class OAuthProvider {
     };
   }
 
-  async revokeToken(token) {
-    this.store.deleteToken(token);
+  // RFC 7009: an unknown token, or one of another client, is still a 200.
+  async revokeToken(client, request) {
+    const data = this.store.getToken(request.token);
+    if (data && data.clientId === client.client_id) this.store.deleteToken(request.token);
   }
 }
 

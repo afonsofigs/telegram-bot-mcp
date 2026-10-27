@@ -2,7 +2,7 @@
 
 ## What is this?
 
-A self-hosted MCP server that sends Telegram messages via Bot API. One tool: `send_message`. Protected by OAuth 2.1 with credentials derived from the bot token.
+A self-hosted MCP server that sends Telegram messages via Bot API. One tool: `send_message`. Protected by OAuth 2.1 with credentials derived from `MCP_SECRET`.
 
 ## Stack
 
@@ -25,14 +25,15 @@ Dockerfile         — Container build
 
 ```bash
 npm install
-TELEGRAM_BOT_TOKEN=token SERVER_URL=http://localhost:3000 node server.js
+TELEGRAM_BOT_TOKEN=token MCP_SECRET=secret SERVER_URL=http://localhost:3000 node server.js
 ```
 
 ## Key design decisions
 
 - **OAuth 2.1 file-persisted** — Tokens and authorization codes stored in `TOKEN_STORE_PATH` (default `/data/oauth-tokens.json`) via `TokenStore`. Single-instance only (no shared store across replicas), but clients survive pod restarts as long as the path is on a mounted volume.
-- **Fixed client credentials** — `client_id` and `client_secret` derived from `TELEGRAM_BOT_TOKEN` via SHA-256. No dynamic registration from unknown clients. Deterministic across restarts.
-- **Auto-approve authorize** — No login page. Security enforced by fixed client credentials. Only someone with the bot token can derive matching credentials.
+- **Fixed client credentials** — `client_id` and `client_secret` derived from `MCP_SECRET` (required) via SHA-256. Deterministic across restarts. No dynamic registration: `/register` is not served, so the credentials are pasted by hand into the connector's settings.
+- **Rotating `MCP_SECRET` revokes everything** — on startup the token store drops codes and tokens issued to the previous `client_id`, and `verifyAccessToken` refuses a token of another client.
+- **Auto-approve authorize** — No login page. Security enforced by fixed client credentials. Only someone with `MCP_SECRET` can derive matching credentials.
 - **Redirect URI validation** — Only `claude.ai` and `claude.com` callback URLs accepted.
 - **Manual bearer auth** — Uses custom middleware instead of SDK's `requireBearerAuth` for better logging and control.
 - **No polling** — Bot created in non-polling mode (only sends, never receives).
